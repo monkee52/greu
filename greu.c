@@ -1,10 +1,26 @@
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/types.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN 1
 
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+#else
+#include <sys/ioctl.h>
+
+/* Below headers are included in WinSock2.h */
+#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <net/if.h>
+#endif
+
+
+#include <sys/types.h>
+
+#ifdef _WIN32
+typedef int ssize_t;
+#endif
 
 #ifdef __linux__
 #include <linux/if_tun.h>
@@ -12,7 +28,9 @@
 #include <net/if_tun.h>
 #endif
 
+#ifndef _WIN32
 #include <event.h>
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -21,7 +39,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+
+#ifdef _WIN32
+#include <stdint.h>
+
+typedef u_short sa_family_t;
+#endif
 
 #include "log.h"
 
@@ -53,7 +80,7 @@ int num_tuntaps;
 /**
  *  Print usage information for the program.
  */
-#ifdef __linux__
+#if defined __linux__ || defined _WIN32
 void
 #else
 __dead void
@@ -107,7 +134,7 @@ connect_to_server(char* hostname, char* service_name, sa_family_t ai_family, con
             continue;
         }
         
-        if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0) {
+        if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&(int){ 1 }, sizeof(int)) < 0) {
             cause = strerror(errno);
             continue;
         }
@@ -282,7 +309,7 @@ open_tuntap(char *device_parameter, int is_tap, int socket_fd)
     uintmax_t key_value;
     
     /* Split key from device path */
-    tuntap_location = strsep(&device_parameter, "@");
+    tuntap_location = strtok(device_parameter, "@");
     
 #ifdef __linux__
     /* Open the default tunnel device if on Linux */
@@ -445,6 +472,19 @@ main(int argc, char** argv)
     if (num_taps < 1 && num_tuns < 1) {
         lerrx(1, "At least one IP or Ethernet tunnel must be configured.");
     }
+
+#ifdef _WIN32
+	WSADATA wsaData;
+
+	/* Initialize WinSock */
+	int wsaStartResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+	if (wsaStartResult != 0) {
+		fprintf(stderr, "WSAStartup failed: %d\n", wsaStartResult);
+
+		exit(1);
+	}
+#endif
     
     hostname = argv[0];
     
@@ -493,6 +533,11 @@ main(int argc, char** argv)
     free(tuns);
     free(taplist);
     close(socket_fd);
+
+#ifdef _WIN32
+	/* WinSock cleanup */
+	WSACleanup();
+#endif
     
     return 0;
 }

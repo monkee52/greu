@@ -24,12 +24,27 @@ struct __logger {
 	    __attribute__((__format__ (printf, 2, 3)));
 	void (*errx)(int, const char *, ...)
 	    __attribute__((__format__ (printf, 2, 3)));
+#elif _WIN32
+	void (*err)(int, const char *, ...)
+		_Printf_format_string_;
+	void (*errx)(int, const char *, ...)
+		_Printf_format_string_;
 #else
 	__dead void (*err)(int, const char *, ...)
 	    __attribute__((__format__ (printf, 2, 3)));
 	__dead void (*errx)(int, const char *, ...)
 	    __attribute__((__format__ (printf, 2, 3)));
 #endif
+#ifdef _WIN32
+	void (*warn)(const char *, ...)
+		_Printf_format_string_;
+	void (*warnx)(const char *, ...)
+		_Printf_format_string_;
+	void (*info)(const char *, ...)
+		_Printf_format_string_;
+	void (*debug)(const char *, ...)
+		_Printf_format_string_;
+#else
 	void (*warn)(const char *, ...)
 	    __attribute__((__format__ (printf, 1, 2)));
 	void (*warnx)(const char *, ...)
@@ -38,16 +53,26 @@ struct __logger {
 	    __attribute__((__format__ (printf, 1, 2)));
 	void (*debug)(const char *, ...)
 	    __attribute__((__format__ (printf, 1, 2)));
+#endif
 };
 
 extern const struct __logger *__logger;
 
+#ifndef _WIN32
 #define lerr(_e, _f...) __logger->err((_e), _f)
 #define lerrx(_e, _f...) __logger->errx((_e), _f)
 #define lwarn(_f...) __logger->warn(_f)
 #define lwarnx(_f...) __logger->warnx(_f)
 #define linfo(_f...) __logger->info(_f)
 #define ldebug(_f...) __logger->debug(_f)
+#else
+#define lerr(_e, ...) __logger->err((_e), __VA_ARGS__)
+#define lerrx(_e, ...) __logger->errx((_e), __VA_ARGS__)
+#define lwarn(...) __logger->warn(__VA_ARGS__)
+#define lwarnx(...) __logger->warnx(__VA_ARGS__)
+#define linfo(...) __logger->info(__VA_ARGS__)
+#define ldebug(...) __logger->debug(__VA_ARGS__)
+#endif
 
 void	logger_syslog(const char *);
 
