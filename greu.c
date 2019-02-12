@@ -48,6 +48,8 @@ typedef int ssize_t;
 #include <stdint.h>
 
 typedef u_short sa_family_t;
+
+#define ERROR_STRING_BUFFER_SIZE 4096
 #endif
 
 #include "log.h"
@@ -115,6 +117,23 @@ resolve_address(const char *hostname, const char *service_name, sa_family_t ai_f
 }
 
 /**
+* Provides a non implementation specific strerror
+*/
+const char * errno_to_string(int errnum)
+{
+#ifdef _WIN32
+	// TODO: Memory cleanup
+	char * error_string = malloc(ERROR_STRING_BUFFER_SIZE);
+
+	strerror_s(error_string, ERROR_STRING_BUFFER_SIZE, errnum);
+
+	return error_string;
+#else
+	return strerror(errnum);
+#endif
+}
+
+/**
  *  Open a socket to a server using a hostname and service name.
  */
 int
@@ -130,19 +149,24 @@ connect_to_server(char* hostname, char* service_name, sa_family_t ai_family, con
         socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         
         if (socket_fd < 0) {
-            cause = strerror(errno);
+			cause = errno_to_string(errno);
+            
             continue;
         }
         
         if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&(int){ 1 }, sizeof(int)) < 0) {
-            cause = strerror(errno);
+            cause = errno_to_string(errno);
             continue;
         }
         
         /* Bind socket to a specific local address and port if necessary */
         if (bind(socket_fd, res->ai_addr, res->ai_addrlen) < 0) {
-            cause = strerror(errno);
-            close(socket_fd);
+            cause = errno_to_string(errno);
+#ifndef _WIN32
+			close(socket_fd);
+#else
+			closesocket(socket_fd);
+#endif
             socket_fd = -1;
             continue;
         }
@@ -155,8 +179,12 @@ connect_to_server(char* hostname, char* service_name, sa_family_t ai_family, con
     for (res = remote_addrinfo;  res != NULL; res = res->ai_next) {
         /* Connect to the corresponding socket */
         if (connect(socket_fd, res->ai_addr, res->ai_addrlen) < 0) {
-            cause = strerror(errno);
+            cause = errno_to_string(errno);
+#ifndef _WIN32
             close(socket_fd);
+#else
+			closesocket(socket_fd);
+#endif
             socket_fd = -1;
             continue;
         }
@@ -189,7 +217,7 @@ decapsulate(int fd, short events, void *conn)
     buffer = malloc(BUFSIZE);
     
     if (read_length = read(fd, buffer, BUFSIZE), read_length < 0) {
-        lerrx(1, "Error reading from socket: %s\n", strerror(errno));
+        lerrx(1, "Error reading from socket: %s\n", errno_to_string(errno));
     }
     
     header = (struct gre_header *) buffer;
@@ -240,7 +268,7 @@ encapsulate(int fd, short events, void *conn)
     
     /* Read frame/packet from tunnel device */
     if (read_length = read(fd, buffer, BUFSIZE), read_length < 0) {
-        lerrx(1, "Error reading from tunnel device %s: %s\n", tuntap_struct->tuntap_location, strerror(errno));
+        lerrx(1, "Error reading from tunnel device %s: %s\n", tuntap_struct->tuntap_location, errno_to_string(errno));
     }
     
     /* Set GRE Key Present field */
@@ -282,7 +310,7 @@ encapsulate(int fd, short events, void *conn)
     /* Prepend GRE key to data if necessary */
     if (tuntap_struct->key != 0) {
         if (data = realloc(data, sizeof(struct gre_header) + sizeof(uint32_t) + read_length), data == NULL) {
-            lerrx(1, "%s\n", strerror(errno));
+            lerrx(1, "%s\n", errno_to_string(errno));
         }
         
         memcpy(&data[4], &tuntap_struct->key, sizeof(uint32_t));
@@ -309,12 +337,18 @@ open_tuntap(char *device_parameter, int is_tap, int socket_fd)
     uintmax_t key_value;
     
     /* Split key from device path */
+#ifndef _WIN32
     tuntap_location = strtok(device_parameter, "@");
+#else
+	char *next_token = NULL;
+
+	tuntap_location = strtok_s(device_parameter, "@", &next_token);
+#endif
     
 #ifdef __linux__
     /* Open the default tunnel device if on Linux */
     if (fd = open("/dev/net/tun", O_RDWR), fd < 0) {
-        lerrx(1, "Error opening generic tunnel device for %s: %s", tuntap_location, strerror(err));
+        lerrx(1, "Error opening generic tunnel device for %s: %s", tuntap_location, errno_to_string(err));
         return fd;
     }
     
@@ -324,14 +358,14 @@ open_tuntap(char *device_parameter, int is_tap, int socket_fd)
     strncpy(ifr.ifr_name, device_parameter, IFNAMSIZ);
     
     if (ioctl(fd, TUNSETIFF, (void *) &ifr) < 0) {
-        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, strerror(err));
+        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, errno_to_string(err));
         return fd;
     }
     
 #else
     if (fd = open(tuntap_location, O_RDWR), fd < 0) {
         err = errno;
-        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, strerror(err));
+        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, errno_to_string(err));
         return fd;
     }
 #endif
@@ -339,7 +373,7 @@ open_tuntap(char *device_parameter, int is_tap, int socket_fd)
     /* Make sure the file descriptor isn't blocking */
     if (err = ioctl(fd, FIONBIO, &(int){ 1 }), err < 0) {
         close(fd);
-        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, strerror(err));
+        lerrx(1, "Error opening tunnel device %s: %s", tuntap_location, errno_to_string(err));
     }
     
     /* Initialise TUN/TAP details */
@@ -494,8 +528,15 @@ main(int argc, char** argv)
     /* TODO: daemon() has been deprecated */
     /* Daemonise */
     if (daemonise) {
+		//TODO: Windows event log?
+#ifndef _WIN32
         logger_syslog(getprogname());
-        daemon(0, 0);
+		daemon(0, 0);
+#else
+		/* Detach from console host - does not fork */
+		FreeConsole();
+#endif
+        
     }
     
     /* Initialise libevent */

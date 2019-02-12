@@ -1,0 +1,9 @@
+!include <win32.mak>
+
+all: greu.exe
+
+.c.obj:
+	$(cc) $(cdebug) $(cflags) $(cvars) $*.c
+
+greu.exe: greu.obj log.obj
+	$(link) ($ldebug) $(conflags) -out:greu.exe greu.obj $(conlibs) Ws2_32.lib
